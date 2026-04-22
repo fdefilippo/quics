@@ -1,0 +1,29 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --with=golang
+
+override_dh_auto_build:
+	$(MAKE) server client
+
+override_dh_auto_install:
+	# Create directories
+	install -d debian/quics/usr/bin
+	install -d debian/quics/etc/quics
+	install -d debian/quics/var/lib/quics/files
+	install -d debian/quics/usr/share/doc/quics
+	install -d debian/quics/etc/quics/certs
+	
+	# Install binaries
+	install -m 0755 bin/quicsd debian/quics/usr/bin/
+	install -m 0755 bin/quicsc debian/quics/usr/bin/
+	
+	# Install configuration
+	install -m 0644 config/server.yaml debian/quics/etc/quics/server.yaml.example
+	install -m 0644 certs/README.md debian/quics/usr/share/doc/quics/CERTIFICATES.md
+	install -m 0644 README.md debian/quics/usr/share/doc/quics/
+	install -m 0644 LICENSE debian/quics/usr/share/doc/quics/copyright
+
+override_dh_auto_test:
+	# Run tests
+	$(MAKE) test

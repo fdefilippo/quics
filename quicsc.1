@@ -1,0 +1,180 @@
+.\" Manpage for quicsc
+.\" groff -man -Tascii quicsc.1 | less
+.TH QUICSC 1 "April 2026" "QUICS v0.1" "User Commands"
+.SH NAME
+quicsc \- QUIC client for secure file transfer and remote command execution
+.SH SYNOPSIS
+.B quicsc
+[\fIOPTIONS\fR]
+[\fISERVER_ADDR\fR]
+.SH DESCRIPTION
+.B quicsc
+is a client for secure file transfer and remote command execution over the
+QUIC protocol with mutual TLS authentication. It uses X.509 client certificates
+for authentication and can operate in both interactive and non-interactive modes.
+.PP
+The client supports file upload/download, remote command execution, and
+execution of commands with specific user/group privileges (Linux only).
+All communication is encrypted using TLS 1.3 over QUIC.
+.SH CRYPTOGRAPHY
+The client uses a hardened TLS 1.3 configuration with post-quantum hybrid cryptography:
+.RS
+.IP \(bu 2
+Preferred key exchange: X25519MLKEM768 (X25519 + ML-KEM-768 hybrid)
+.IP \(bu 2
+Fallback curves: X25519, CurveP256
+.IP \(bu 2
+Cipher suites: TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256, TLS_AES_128_GCM_SHA256
+.IP \(bu 2
+TLS 1.3 only with mutual authentication
+.IP \(bu 2
+Forward secrecy enabled by default
+.RE
+.SH OPTIONS
+.TP
+\fB\-s\fR, \fB\-\-server\-addr\fR \fISERVER_ADDR\fR
+Server address (default: localhost:4242)
+.TP
+\fB\-C\fR, \fB\-\-client\-cert\fR \fICERT_FILE\fR
+Path to client certificate (PEM format, default: ~/.quicsc/public.crt)
+.TP
+\fB\-K\fR, \fB\-\-client\-key\fR \fIKEY_FILE\fR
+Path to client private key (PEM format, must have 600 permissions,
+default: ~/.quicsc/private.key)
+.TP
+\fB\-a\fR, \fB\-\-ca\-cert\fR \fICA_FILE\fR
+CA certificate to verify server (optional)
+.TP
+\fB\-k\fR, \fB\-\-insecure\fR
+Skip server certificate verification (for testing only)
+.TP
+\fB\-i\fR, \fB\-\-interactive\fR
+Start interactive session (default: true)
+.TP
+\fB\-t\fR, \fB\-\-max\-idle\-timeout\fR \fISECONDS\fR
+Maximum idle timeout in seconds (default: 120)
+.TP
+\fB\-p\fR, \fB\-\-keep\-alive\-period\fR \fISECONDS\fR
+Keep-alive period in seconds (default: 15, -1 to disable)
+.SH NON-INTERACTIVE COMMANDS
+.TP
+\fB\-u\fR, \fB\-\-upload\fR \fILOCAL_FILE\fR
+Local file to upload to server
+.TP
+\fB\-d\fR, \fB\-\-download\fR \fIREMOTE_FILE\fR
+Remote file to download from server
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fILOCAL_FILE\fR
+Output path for downloaded file
+.TP
+\fB\-c\fR, \fB\-\-cmd\fR \fICOMMAND\fR
+Remote command to execute
+.TP
+\fB\-m\fR, \fB\-\-mode\fR \fIMODE\fR
+Transfer mode: BIN or ASCII (default: BIN)
+.TP
+\fB\-e\fR, \fB\-\-env\fR \fINAME=VALUE\fR
+Environment variable in NAME=VALUE format (can be repeated)
+.SH EXEC COMMANDS (LINUX ONLY)
+.TP
+\fB\-X\fR, \fB\-\-exec\-cmd\fR \fICOMMAND\fR
+Command to execute with specified user/group
+.TP
+\fB\-U\fR, \fB\-\-exec\-user\fR \fIUSER\fR
+User to run command as ('-' for current user)
+.TP
+\fB\-G\fR, \fB\-\-exec\-group\fR \fIGROUP\fR
+Group to run command as ('-' for current group)
+.SH INTERACTIVE MODE
+When started without non-interactive commands, \fBquicsc\fR enters interactive
+mode with the following commands:
+.TP
+.B ! \fICOMMAND\fR
+Execute local shell command
+.TP
+.B put \fILOCAL\fR [\fIREMOTE\fR] [ascii|bin]
+Upload file
+.TP
+.B get \fIREMOTE\fR [\fILOCAL\fR] [ascii|bin]
+Download file
+.TP
+.B exec \fIUSER\fR \fIGROUP\fR \fICOMMAND\fR
+Execute command as specified user/group
+.TP
+.B cd \fIDIRECTORY\fR
+Change working directory on server
+.TP
+.B \fIREMOTE_COMMAND\fR
+Execute command on server
+.TP
+.B exit, quit
+Exit interactive mode
+.TP
+.B help
+Show help
+.PP
+Interactive features: arrow keys for command history, Tab for completion,
+Ctrl+C to cancel line, Ctrl+D to exit.
+.SH EXAMPLES
+.TP
+Upload a file:
+.B quicsc \-s server.example.com:4243 \-u /path/to/file.txt
+.TP
+Download a file:
+.B quicsc server.example.com:4243 \-d file.txt \-o local.txt
+.TP
+Execute remote command:
+.B quicsc \-c "ls \-la" server.example.com:4243
+.TP
+Interactive session:
+.B quicsc \-s server.example.com:4243
+.TP
+Execute command as another user (Linux):
+.B quicsc \-U www\-data \-G www\-data \-X "id" server.example.com:4243
+.TP
+With custom certificates:
+.B quicsc \-C ~/certs/user.crt \-K ~/certs/user.key \-a ~/certs/ca.crt server.example.com:4243
+.SH CERTIFICATE CONFIGURATION
+Client certificates are automatically read from \fB~/.quicsc/\fR if available:
+.nf
+~/.quicsc/
+- public.crt    # Client certificate
+- private.key   # Private key (must have 600 permissions)
+- ca.crt        # CA certificate (optional)
+.fi
+.PP
+To install certificates:
+.nf
+cd certs/users/<userid>
+./install-to-client.sh
+.fi
+.SH TRANSFER MODES
+.TP
+.B BIN
+Binary transfer (default), preserves all bytes
+.TP
+.B ASCII
+Text transfer with newline conversion (LF <-> CRLF)
+.SH CONNECTION SETTINGS
+.TP
+.B Connection timeout
+5 seconds for initial connection
+.TP
+.B Idle timeout
+Configurable, default 2 minutes
+.TP
+.B Keep-alive
+Packets every 15 seconds to maintain NAT connections
+.SH FILES
+.TP
+.B ~/.quicsc/
+Default client certificate directory
+.TP
+.B certs/users/*/install-to-client.sh
+Scripts to install user certificates
+.SH SEE ALSO
+.BR quicsd (1)
+.SH AUTHOR
+Francesco Defilippo <francesco@defilippo.org>
+.SH BUGS
+Report bugs at the project repository issue tracker.
