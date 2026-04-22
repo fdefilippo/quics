@@ -7,6 +7,17 @@ quicsd \- QUIC server for secure file transfer and remote command execution
 .B quicsd
 [\fI\-c\fR \fICONFIG_FILE\fR]
 [\fI\-\-version\fR]
+.br
+.B quicsd create\-ca
+[\fI\-u\fR \fIUSERID\fR]
+[\fI\-\-name\fR \fINAME\fR]
+[\fI\-\-email\fR \fIEMAIL\fR]
+.br
+.B quicsd create\-cert
+[\fI\-u\fR \fIUSERID\fR]
+[\fI\-\-name\fR \fINAME\fR]
+[\fI\-\-surname\fR \fISURNAME\fR]
+[\fI\-\-email\fR \fIEMAIL\fR]
 .SH DESCRIPTION
 .B quicsd
 is a server that provides secure file transfer and remote command execution
@@ -18,6 +29,11 @@ The server implements user isolation where each non-root user gets a home
 directory at \fIstorage.root_dir\fR/\fIuserid\fR (created automatically with 0700
 permissions). The root user has access to the entire storage root directory.
 Paths are resolved relative to user home directories for isolation.
+.PP
+The server includes built-in certificate management commands to create a
+Certificate Authority (CA) and user certificates using ECDSA P-256 cryptography.
+Client certificate validation is mandatory; the server will not start without
+a valid CA certificate specified in the configuration.
 .SH CRYPTOGRAPHY
 The server uses a hardened TLS 1.3 configuration with post-quantum hybrid cryptography:
 .RS
@@ -39,6 +55,38 @@ Path to configuration file (default: ./config/server.yaml)
 .TP
 \fB\-\-version\fR
 Print version information and exit
+.SH COMMANDS
+.TP
+.B create\-ca
+Create a new ECDSA P-256 Certificate Authority.
+.RS
+.TP
+\fB\-u\fR, \fB\-\-userid\fR \fIUSERID\fR
+CA user ID (used for filename, default: ca)
+.TP
+\fB\-\-name\fR \fINAME\fR
+CA common name (default: QUICS CA)
+.TP
+\fB\-\-email\fR \fIEMAIL\fR
+CA email address (optional)
+.RE
+.TP
+.B create\-cert
+Create a new user certificate signed by the CA.
+.RS
+.TP
+\fB\-u\fR, \fB\-\-userid\fR \fIUSERID\fR
+User ID (required, used for filename)
+.TP
+\fB\-\-name\fR \fINAME\fR
+User's first name (optional)
+.TP
+\fB\-\-surname\fR \fISURNAME\fR
+User's last name (optional)
+.TP
+\fB\-\-email\fR \fIEMAIL\fR
+User's email address (optional)
+.RE
 .SH CONFIGURATION
 The server reads configuration from a YAML file. The following options are
 available:
@@ -56,8 +104,11 @@ Path to server TLS certificate (PEM format)
 Path to server private key (PEM format, must have 600 permissions)
 .TP
 .B auth.client_ca_file
-Path to CA certificate for client certificate validation (optional).
-If empty, any valid self-signed client certificate is accepted.
+Path to CA certificate for client certificate validation (mandatory).
+The server will not start if this field is empty.
+.TP
+.B auth.certs_dir
+Directory where CA and user certificates are stored (default: ./certs).
 .TP
 .B storage.root_dir
 Root directory for file storage
@@ -102,7 +153,16 @@ User "root" gets direct access to the storage root directory
 .IP \(bu 2
 Other users get home directories at \fIstorage.root_dir\fR/\fIuserid\fR
 .SH CERTIFICATE GENERATION
-Use the scripts in the \fIcerts/\fR directory:
+Certificates can be generated using the built-in commands or external scripts.
+.TP
+.B Built-in commands
+Use \fBquicsd create\-ca\fR to create a new ECDSA P-256 Certificate Authority
+and \fBquicsd create\-cert\fR to create user certificates signed by the CA.
+Certificates are saved in the \fIauth.certs_dir\fR directory.
+.TP
+.B External scripts
+The \fIcerts/\fR directory contains OpenSSL scripts for certificate generation:
+.RS
 .TP
 .B regenerate-certs.sh
 Regenerate CA, server, and client certificates with proper Subject Alternative
@@ -110,6 +170,7 @@ Names (SANs) for localhost and 127.0.0.1
 .TP
 .B generate-user-cert.sh
 Generate user certificates with UID, email, and name fields
+.RE
 .SH EXAMPLE CONFIGURATION
 .nf
 listen_addr: "0.0.0.0"
@@ -121,6 +182,7 @@ tls:
 
 auth:
   client_ca_file: "certs/ca.crt"
+  certs_dir: "./certs"
 
 storage:
   root_dir: "./files"
@@ -148,6 +210,12 @@ quicsd -c /etc/quics/server.yaml
 
 # Check version
 quicsd --version
+
+# Create a new CA
+quicsd create-ca --userid ca --name "QUICS CA" --email admin@example.com
+
+# Create a user certificate
+quicsd create-cert --userid alice --name Alice --surname Smith --email alice@example.com
 .fi
 .SH FILES
 .TP

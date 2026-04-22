@@ -20,13 +20,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version information set during build
-var (
-	Version   string
-	BuildDate string
-	GitCommit string
-)
-
 type ClientConfig struct {
 	ClientCert             string
 	ClientKey              string
@@ -65,32 +58,19 @@ var (
 	insecure               bool
 	maxIdleTimeoutSeconds  int
 	keepAlivePeriodSeconds int
-	versionFlag bool
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "quicsc [flags] [server-addr]",
+	Use:   "quicsc",
 	Short: "QUIC client for file transfer and remote command execution",
 	Long: `QUICS client provides secure file transfer and remote command execution
-over QUIC protocol with mutual TLS authentication.
-If server-addr is provided as a positional argument, it overrides --server-addr flag.`,
-	Args: cobra.MaximumNArgs(1),
+over QUIC protocol with mutual TLS authentication.`,
 	PreRunE: validateConfig,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if versionFlag {
-			fmt.Printf("quicsc version %s (built on %s, commit %s)\n", Version, BuildDate, GitCommit)
-	return nil
-}
-
-		// Use positional argument for server address if provided
-		addr := serverAddr
-		if len(args) > 0 {
-			addr = args[0]
-		}
 		config := &ClientConfig{
 			ClientCert:             clientCert,
 			ClientKey:              clientKey,
-			ServerAddr:             addr,
+			ServerAddr:             serverAddr,
 			CACert:                 caCert,
 			Upload:                 upload,
 			Download:               download,
@@ -114,7 +94,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&clientCert, "client-cert", "C", "", "Path to client certificate (PEM). Default: ~/.quicsc/public.crt")
 	rootCmd.PersistentFlags().StringVarP(&clientKey, "client-key", "K", "", "Path to client private key (PEM). Default: ~/.quicsc/private.key (must have 600 permissions)")
 	rootCmd.PersistentFlags().StringVarP(&serverAddr, "server-addr", "s", "localhost:4242", "Server address")
-	rootCmd.PersistentFlags().StringVarP(&caCert, "ca-cert", "a", "", "CA certificate to verify server (optional)")
+	rootCmd.PersistentFlags().StringVarP(&caCert, "ca-cert", "a", "", "CA certificate to verify server (optional). Default: ~/.quicsc/ca.crt if present")
 	rootCmd.PersistentFlags().StringVarP(&upload, "upload", "u", "", "Local file to upload")
 	rootCmd.PersistentFlags().StringVarP(&download, "download", "d", "", "Remote file to download")
 	rootCmd.PersistentFlags().StringVarP(&output, "output", "o", "", "Output path for downloaded file")
@@ -128,42 +108,28 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&insecure, "insecure", "k", false, "Skip server certificate verification")
 	rootCmd.PersistentFlags().IntVarP(&maxIdleTimeoutSeconds, "max-idle-timeout", "t", 120, "Maximum idle timeout in seconds (default: 120)")
 	rootCmd.PersistentFlags().IntVarP(&keepAlivePeriodSeconds, "keep-alive-period", "p", 15, "Keep-alive period in seconds (default: 15, -1 to disable)")
-	rootCmd.Flags().BoolVar(&versionFlag, "version", false, "Print version information and exit")
-	
-	// Don't show usage on errors (e.g., connection failures)
-	rootCmd.SilenceUsage = true
-	// Don't show automatic error messages (we'll print them ourselves)
-	rootCmd.SilenceErrors = true
+
 }
 
 func validateConfig(cmd *cobra.Command, args []string) error {
-	if versionFlag {
-		return nil
+	// Get home directory for default paths
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get user home directory: %w", err)
 	}
-
-	// If no arguments were provided at all, show usage
-	if len(os.Args) == 1 {
-		cmd.Help()
-		return fmt.Errorf("no command specified")
-	}
+	defaultCertDir := filepath.Join(homeDir, ".quicsc")
 
 	// Set default certificate paths if not provided
 	if clientCert == "" || clientKey == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("failed to get user home directory: %w", err)
-		}
-		
-		defaultCertDir := filepath.Join(homeDir, ".quicsc")
 		defaultCert := filepath.Join(defaultCertDir, "public.crt")
 		defaultKey := filepath.Join(defaultCertDir, "private.key")
-		
+
 		if clientCert == "" {
 			if _, err := os.Stat(defaultCert); err == nil {
 				clientCert = defaultCert
 			}
 		}
-		
+
 		if clientKey == "" {
 			if _, err := os.Stat(defaultKey); err == nil {
 				clientKey = defaultKey
@@ -173,18 +139,25 @@ func validateConfig(cmd *cobra.Command, args []string) error {
 					perm := info.Mode().Perm()
 					if perm != 0600 {
 						return fmt.Errorf("private key file %s must have permissions 600 (rw-------), got %o", defaultKey, perm)
-}
-
+					}
 				}
 			}
 		}
 	}
-	
+
+	// Set default CA certificate if not provided
+	if caCert == "" {
+		defaultCA := filepath.Join(defaultCertDir, "ca.crt")
+		if _, err := os.Stat(defaultCA); err == nil {
+			caCert = defaultCA
+		}
+	}
+
 	// After checking defaults, still validate that we have certificates
 	if clientCert == "" || clientKey == "" {
 		return fmt.Errorf("client certificate and key are required (provide via --client-cert/--client-key or place in ~/.quicsc/public.crt and ~/.quicsc/private.key)")
 	}
-	
+
 	// Check that certificate files exist and are readable
 	if _, err := os.Stat(clientCert); err != nil {
 		return fmt.Errorf("client certificate file %s not found or not readable: %w", clientCert, err)
@@ -192,7 +165,7 @@ func validateConfig(cmd *cobra.Command, args []string) error {
 	if _, err := os.Stat(clientKey); err != nil {
 		return fmt.Errorf("client key file %s not found or not readable: %w", clientKey, err)
 	}
-	
+
 	// Validate private key permissions (must be 600)
 	info, err := os.Stat(clientKey)
 	if err != nil {
@@ -202,22 +175,22 @@ func validateConfig(cmd *cobra.Command, args []string) error {
 	if perm != 0600 {
 		return fmt.Errorf("private key file %s must have permissions 600 (rw-------), got %o", clientKey, perm)
 	}
-	
+
 	// Validate that at least one operation is specified
 	// Note: interactive defaults to true, so this will only fail if explicitly set to false
 	if upload == "" && download == "" && cmdStr == "" && execCmd == "" && !interactive {
 		return fmt.Errorf("at least one of --upload, --download, --cmd, --exec-cmd, or --interactive must be specified")
 	}
-	
+
 	// Validate exec parameters: if any exec flag is set, all three must be set
 	if (execUser != "" || execGroup != "" || execCmd != "") && (execUser == "" || execGroup == "" || execCmd == "") {
 		return fmt.Errorf("--exec-user, --exec-group, and --exec-cmd must all be specified together")
 	}
-	
+
 	if mode != "BIN" && mode != "ASCII" {
 		return fmt.Errorf("mode must be BIN or ASCII")
 	}
-	
+
 	return nil
 }
 
@@ -238,13 +211,6 @@ func runClient(config *ClientConfig) error {
 		Certificates:       []tls.Certificate{cert},
 		NextProtos:         []string{"quic-file-transfer"},
 		InsecureSkipVerify: config.Insecure,
-		// Prefer post-quantum hybrid curve (X25519MLKEM768), then X25519, then P-256
-		CurvePreferences: []tls.CurveID{tls.X25519MLKEM768, tls.X25519, tls.CurveP256},
-		// Strong TLS 1.3 cipher suites
-		CipherSuites: []uint16{tls.TLS_AES_256_GCM_SHA384, tls.TLS_CHACHA20_POLY1305_SHA256, tls.TLS_AES_128_GCM_SHA256},
-		// QUIC requires TLS 1.3
-		MinVersion: tls.VersionTLS13,
-		MaxVersion: tls.VersionTLS13,
 	}
 
 	if config.CACert != "" {
@@ -259,9 +225,8 @@ func runClient(config *ClientConfig) error {
 		tlsConfig.RootCAs = caCertPool
 	}
 
-	// Separate context for dial with short timeout
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer dialCancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	// Default values
 	const defaultIdleTimeout = 120 * time.Second
@@ -288,16 +253,15 @@ func runClient(config *ClientConfig) error {
 
 	fmt.Printf("QUIC config: idle_timeout=%v, keepalive=%v\n",
 		idleTimeout, keepAlive)
-	conn, err := quic.DialAddr(dialCtx, config.ServerAddr, tlsConfig, quicConfig)
+	conn, err := quic.DialAddr(ctx, config.ServerAddr, tlsConfig, quicConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("dialing server: %w", err)
 	}
 	defer conn.CloseWithError(0, "")
 
 	fmt.Printf("Connected to %s\n", config.ServerAddr)
 
-	// Use background context for stream operations (idle timeout will handle disconnections)
-	stream, err := conn.OpenStreamSync(context.Background())
+	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("opening stream: %w", err)
 	}
@@ -655,7 +619,6 @@ func handleInteractive(stream *quic.Stream, config *ClientConfig) error {
 		readline.PcItem("put"),
 		readline.PcItem("get"),
 		readline.PcItem("exec"),
-		readline.PcItem("cd"),
 	)
 
 	rl, err := readline.NewEx(&readline.Config{
@@ -761,16 +724,6 @@ func handleInteractive(stream *quic.Stream, config *ClientConfig) error {
 			if err != nil {
 				fmt.Printf("Exec error: %v\n", err)
 			}
-		case "cd":
-			if len(args) < 1 {
-				fmt.Println("Usage: cd <directory>")
-				continue
-			}
-			dir := args[0]
-			err := changeDirectoryInteractive(stream, dir)
-			if err != nil {
-				fmt.Printf("CD error: %v\n", err)
-			}
 		default:
 			// Remote command
 			err := executeRemoteCommandInteractive(stream, line)
@@ -791,7 +744,6 @@ func printHelp() {
 	fmt.Println("  put <local> [remote] [ascii|bin]  Upload file")
 	fmt.Println("  get <remote> [local] [ascii|bin]  Download file")
 	fmt.Println("  exec <user> <group> <cmd> Execute command as user/group")
-	fmt.Println("  cd <directory>       Change working directory on server")
 	fmt.Println("  <remote command>     Execute command on server")
 	fmt.Println("  exit, quit           Exit interactive mode")
 	fmt.Println("  help                 Show this help")
@@ -1037,24 +989,5 @@ func executeRemoteExecInteractive(stream *quic.Stream, user, group, cmd string) 
 	}
 
 	fmt.Printf("Exit code: %s\n", exitCode)
-	return nil
-}
-
-func changeDirectoryInteractive(stream *quic.Stream, dir string) error {
-	command := fmt.Sprintf("%s %s\n", protocol.CommandCD, dir)
-	_, err := stream.Write([]byte(command))
-	if err != nil {
-		return err
-	}
-	reader := bufio.NewReader(stream)
-	statusLine, err := reader.ReadString('\n')
-	if err != nil {
-		return err
-	}
-	status, msg := protocol.ParseResponse(strings.TrimSpace(statusLine))
-	if status != protocol.ResponseOK {
-		return fmt.Errorf("server error: %s", msg)
-	}
-	fmt.Println(msg)
 	return nil
 }

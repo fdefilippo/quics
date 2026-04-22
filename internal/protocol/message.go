@@ -68,11 +68,6 @@ func ParseCommand(line string) (*Command, error) {
 		if len(args) != 1 || !strings.Contains(args[0], "=") {
 			return nil, fmt.Errorf("%s requires NAME=VALUE format", cmdType)
 		}
-	case CommandCD:
-		// CD can have 0 or 1 argument (directory)
-		if len(args) > 1 {
-			return nil, fmt.Errorf("%s requires at most one directory argument", cmdType)
-		}
 	default:
 		return nil, fmt.Errorf("unknown command: %s", cmdType)
 	}

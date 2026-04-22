@@ -19,11 +19,13 @@ import (
 	"time"
 
 	"github.com/francesco/quics/internal/protocol"
+	"github.com/francesco/quics/internal/webhook"
 	"github.com/quic-go/quic-go"
 )
 
 type Server struct {
-	config *Config
+	config   *Config
+	notifier webhook.Notifier
 }
 
 type Config struct {
@@ -39,10 +41,8 @@ type ShellConfig struct {
 }
 
 type session struct {
-	userid    string
-	homeDir   string
-	envVars   []string
-	workingDir string
+	userid  string
+	envVars []string
 }
 
 // isRegexPattern returns true if the pattern contains regex metacharacters.
@@ -72,80 +72,6 @@ func matchesCommand(pattern, cmd string) bool {
 	return pattern == cmd
 }
 
-// resolvePath resolves a filename relative to StorageRoot and ensures it stays within StorageRoot.
-func (s *Server) resolvePath(filename string) (string, error) {
-	// Clean the path
-	cleanPath := filepath.Clean(filename)
-	// If path is absolute, treat as relative to root (strip leading slash)
-	if filepath.IsAbs(cleanPath) {
-		cleanPath = cleanPath[1:]
-	}
-	// Join with StorageRoot
-	fullPath := filepath.Join(s.config.StorageRoot, cleanPath)
-	// Ensure the result is within StorageRoot
-	rel, err := filepath.Rel(s.config.StorageRoot, fullPath)
-	if err != nil {
-		return "", fmt.Errorf("invalid path: %w", err)
-	}
-	if strings.HasPrefix(rel, "..") || strings.Contains(rel, "../") {
-		return "", fmt.Errorf("path attempts to escape storage root")
-	}
-	return fullPath, nil
-}
-
-// getAbsWorkingDir returns the absolute working directory for a session.
-// It joins StorageRoot with session's workingDir and ensures the path is within StorageRoot.
-func (s *Server) getAbsWorkingDir(sess *session) (string, error) {
-	if sess.workingDir == "" || sess.workingDir == "." {
-		return sess.homeDir, nil
-	}
-	return s.resolvePathRelativeToHome(sess.workingDir, sess.homeDir)
-}
-
-// getUserHomeDir returns the home directory path for a given userid.
-// For root user, returns StorageRoot directly.
-// For other users, returns StorageRoot/userid and creates the directory if it doesn't exist.
-func (s *Server) getUserHomeDir(userid string) (string, error) {
-	var homeDir string
-	if userid == "root" {
-		homeDir = s.config.StorageRoot
-	} else {
-		homeDir = filepath.Join(s.config.StorageRoot, userid)
-	}
-	
-	fmt.Printf("Creating home directory for user %s at %s\n", userid, homeDir)
-	// Create directory if it doesn't exist
-	if err := os.MkdirAll(homeDir, 0700); err != nil {
-		fmt.Printf("Failed to create home directory for %s: %v\n", userid, err)
-		return "", fmt.Errorf("failed to create home directory for %s: %w", userid, err)
-	}
-	
-	fmt.Printf("Home directory created/verified for %s: %s\n", userid, homeDir)
-	return homeDir, nil
-}
-
-// resolvePathRelativeToHome resolves a filename relative to user's home directory.
-// Ensures the result stays within the home directory.
-func (s *Server) resolvePathRelativeToHome(filename, homeDir string) (string, error) {
-	// Clean the path
-	cleanPath := filepath.Clean(filename)
-	// If path is absolute, treat as relative to root (strip leading slash)
-	if filepath.IsAbs(cleanPath) {
-		cleanPath = cleanPath[1:]
-	}
-	// Join with home directory
-	fullPath := filepath.Join(homeDir, cleanPath)
-	// Ensure the result is within home directory
-	rel, err := filepath.Rel(homeDir, fullPath)
-	if err != nil {
-		return "", fmt.Errorf("invalid path: %w", err)
-	}
-	if strings.HasPrefix(rel, "..") || strings.Contains(rel, "../") {
-		return "", fmt.Errorf("path attempts to escape home directory")
-	}
-	return fullPath, nil
-}
-
 // hasRequiredCapabilities returns true if the process has permission to set UID and/or GID.
 // Returns true if running as root (euid == 0) or if the required capabilities are present.
 // needUID and needGID indicate which capabilities are required.
@@ -171,8 +97,8 @@ func hasRequiredCapabilities(needUID, needGID bool) bool {
 				var capEff uint64
 				fmt.Sscanf(parts[1], "%x", &capEff)
 				// Check CAP_SETUID (bit 7) and CAP_SETGID (bit 6)
-				hasSetuid := (capEff&(1<<7)) != 0
-				hasSetgid := (capEff&(1<<6)) != 0
+				hasSetuid := (capEff & (1 << 7)) != 0
+				hasSetgid := (capEff & (1 << 6)) != 0
 				if needUID && !hasSetuid {
 					return false
 				}
@@ -187,26 +113,22 @@ func hasRequiredCapabilities(needUID, needGID bool) bool {
 	return false
 }
 
-func NewServer(config *Config) *Server {
-	return &Server{config: config}
+func NewServer(config *Config, notifier webhook.Notifier) *Server {
+	return &Server{config: config, notifier: notifier}
+}
+
+// notify sends a webhook notification asynchronously
+func (s *Server) notify(action string, sess *session, success bool, errMsg string, details map[string]interface{}) {
+	if s.notifier == nil {
+		return
+	}
+	s.notifier.Notify(action, sess.userid, success, errMsg, details)
 }
 
 func (s *Server) HandleStream(stream *quic.Stream, userid string) error {
 	defer stream.Close()
 
-	// Calculate user's home directory
-	homeDir, err := s.getUserHomeDir(userid)
-	if err != nil {
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("failed to setup user home: %v", err))))
-		return fmt.Errorf("failed to setup user home for %s: %w", userid, err)
-	}
-
-	sess := &session{
-		userid:    userid,
-		homeDir:   homeDir,
-		workingDir: ".",
-	}
-	fmt.Printf("User session created: userid=%s, homeDir=%s\n", userid, homeDir)
+	sess := &session{userid: userid}
 	reader := bufio.NewReader(stream)
 
 	for {
@@ -243,10 +165,6 @@ func (s *Server) HandleStream(stream *quic.Stream, userid string) error {
 			if err := s.handleEnv(stream, cmd, sess); err != nil {
 				return err
 			}
-		case protocol.CommandCD:
-			if err := s.handleCD(stream, cmd, sess); err != nil {
-				return err
-			}
 		default:
 			stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, "unknown command")))
 			return fmt.Errorf("unknown command type: %s", cmd.Type)
@@ -256,20 +174,26 @@ func (s *Server) HandleStream(stream *quic.Stream, userid string) error {
 
 func (s *Server) handleUpload(stream *quic.Stream, cmd *protocol.Command, sess *session, reader *bufio.Reader) error {
 	filename := cmd.Args[0]
-	filePath, err := s.resolvePathRelativeToHome(filename, sess.homeDir)
-	if err != nil {
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("invalid file path: %v", err))))
-		return err
-	}
+	filePath := filepath.Join(s.config.StorageRoot, filename)
 
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
 		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("failed to create directory: %v", err))))
+		s.notify("upload", sess, false, err.Error(), map[string]interface{}{
+			"filename": filename,
+			"size":     cmd.Size,
+			"mode":     cmd.Mode,
+		})
 		return err
 	}
 
 	file, err := os.Create(filePath)
 	if err != nil {
 		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("failed to create file: %v", err))))
+		s.notify("upload", sess, false, err.Error(), map[string]interface{}{
+			"filename": filename,
+			"size":     cmd.Size,
+			"mode":     cmd.Mode,
+		})
 		return err
 	}
 	defer file.Close()
@@ -283,34 +207,54 @@ func (s *Server) handleUpload(stream *quic.Stream, cmd *protocol.Command, sess *
 	written, err := io.CopyN(writer, dataReader, cmd.Size)
 	if err != nil && err != io.EOF {
 		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("failed to write file: %v", err))))
+		s.notify("upload", sess, false, err.Error(), map[string]interface{}{
+			"filename": filename,
+			"size":     cmd.Size,
+			"mode":     cmd.Mode,
+		})
 		return err
 	}
 
 	if written != cmd.Size {
 		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("incomplete transfer: expected %d bytes, got %d", cmd.Size, written))))
+		s.notify("upload", sess, false, fmt.Sprintf("incomplete transfer: expected %d bytes, got %d", cmd.Size, written), map[string]interface{}{
+			"filename": filename,
+			"size":     cmd.Size,
+			"mode":     cmd.Mode,
+			"written":  written,
+		})
 		return fmt.Errorf("incomplete transfer")
 	}
 
 	stream.Write([]byte(protocol.BuildResponse(protocol.ResponseOK, fmt.Sprintf("%d bytes written", written))))
+	s.notify("upload", sess, true, "", map[string]interface{}{
+		"filename": filename,
+		"size":     cmd.Size,
+		"mode":     cmd.Mode,
+		"written":  written,
+	})
 	return nil
 }
 
 func (s *Server) handleDownload(stream *quic.Stream, cmd *protocol.Command, sess *session) error {
 	filename := cmd.Args[0]
-	filePath, err := s.resolvePathRelativeToHome(filename, sess.homeDir)
-	if err != nil {
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("invalid file path: %v", err))))
-		return err
-	}
-	fmt.Printf("Download request for user %s: %s (path: %s)\n", sess.userid, filename, filePath)
+	filePath := filepath.Join(s.config.StorageRoot, filename)
+	fmt.Printf("Download request for: %s (path: %s)\n", filename, filePath)
 
 	file, err := os.Open(filePath)
 	if err != nil {
+		var errMsg string
 		if os.IsNotExist(err) {
-			stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, "file not found")))
+			errMsg = "file not found"
+			stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, errMsg)))
 		} else {
-			stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("failed to open file: %v", err))))
+			errMsg = fmt.Sprintf("failed to open file: %v", err)
+			stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, errMsg)))
 		}
+		s.notify("download", sess, false, errMsg, map[string]interface{}{
+			"filename": filename,
+			"mode":     cmd.Mode,
+		})
 		return err
 	}
 	defer file.Close()
@@ -318,6 +262,10 @@ func (s *Server) handleDownload(stream *quic.Stream, cmd *protocol.Command, sess
 	stat, err := file.Stat()
 	if err != nil {
 		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("failed to stat file: %v", err))))
+		s.notify("download", sess, false, fmt.Sprintf("failed to stat file: %v", err), map[string]interface{}{
+			"filename": filename,
+			"mode":     cmd.Mode,
+		})
 		return err
 	}
 
@@ -335,15 +283,29 @@ func (s *Server) handleDownload(stream *quic.Stream, cmd *protocol.Command, sess
 
 	n, err := io.Copy(writer, reader)
 	if err != nil {
+		s.notify("download", sess, false, fmt.Sprintf("failed to send file: %v", err), map[string]interface{}{
+			"filename": filename,
+			"mode":     cmd.Mode,
+			"size":     size,
+		})
 		return fmt.Errorf("failed to send file: %w", err)
 	}
 	fmt.Printf("File sent successfully, size: %d, sent: %d\n", size, n)
+	s.notify("download", sess, true, "", map[string]interface{}{
+		"filename": filename,
+		"mode":     cmd.Mode,
+		"size":     size,
+		"sent":     n,
+	})
 	return nil
 }
 
 func (s *Server) handleCommand(stream *quic.Stream, cmd *protocol.Command, sess *session) error {
 	if !s.config.ShellConfig.Enabled {
 		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, "shell execution is disabled")))
+		s.notify("command", sess, false, "shell execution is disabled", map[string]interface{}{
+			"command": strings.Join(cmd.Args, " "),
+		})
 		return nil
 	}
 
@@ -378,16 +340,13 @@ func (s *Server) handleCommand(stream *quic.Stream, cmd *protocol.Command, sess 
 	fmt.Printf("Executing command: %s\n", cmdStr)
 	execCmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
 	execCmd.Env = env
-	workingDir, err := s.getAbsWorkingDir(sess)
-	if err != nil {
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("invalid working directory: %v", err))))
-		return nil
-	}
-	execCmd.Dir = workingDir
 
 	stdout, err := execCmd.StdoutPipe()
 	if err != nil {
 		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("failed to create stdout pipe: %v", err))))
+		s.notify("command", sess, false, fmt.Sprintf("failed to create stdout pipe: %v", err), map[string]interface{}{
+			"command": cmdStr,
+		})
 		return nil // Don't return error to keep stream open
 	}
 	stderr, err := execCmd.StderrPipe()
@@ -442,12 +401,18 @@ func (s *Server) handleCommand(stream *quic.Stream, cmd *protocol.Command, sess 
 func (s *Server) handleExec(stream *quic.Stream, cmd *protocol.Command, sess *session) error {
 	if !s.config.ShellConfig.Enabled {
 		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, "shell execution is disabled")))
+		s.notify("exec", sess, false, "shell execution is disabled", map[string]interface{}{
+			"command": strings.Join(cmd.Args, " "),
+		})
 		return nil
 	}
 
 	// Parse arguments: user, group, command
 	if len(cmd.Args) < 3 {
 		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, "EXEC requires user, group and command")))
+		s.notify("exec", sess, false, "EXEC requires user, group and command", map[string]interface{}{
+			"command": strings.Join(cmd.Args, " "),
+		})
 		return nil
 	}
 	userStr := cmd.Args[0]
@@ -457,6 +422,11 @@ func (s *Server) handleExec(stream *quic.Stream, cmd *protocol.Command, sess *se
 	// Check if we're on Linux
 	if runtime.GOOS != "linux" {
 		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, "EXEC is only supported on Linux")))
+		s.notify("exec", sess, false, "EXEC is only supported on Linux", map[string]interface{}{
+			"command": commandStr,
+			"user":    userStr,
+			"group":   groupStr,
+		})
 		return nil
 	}
 
@@ -543,12 +513,6 @@ func (s *Server) handleExec(stream *quic.Stream, cmd *protocol.Command, sess *se
 	fmt.Printf("Executing command as uid=%d gid=%d: %s\n", uid, gid, commandStr)
 	execCmd := exec.CommandContext(ctx, "sh", "-c", commandStr)
 	execCmd.Env = env
-	workingDir, err := s.getAbsWorkingDir(sess)
-	if err != nil {
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("invalid working directory: %v", err))))
-		return nil
-	}
-	execCmd.Dir = workingDir
 
 	// Set credentials if needed
 	if needUID || needGID {
@@ -619,10 +583,15 @@ func (s *Server) handleEnv(stream *quic.Stream, cmd *protocol.Command, sess *ses
 	fmt.Printf("Setting environment variable: %s\n", envVar)
 	parts := strings.SplitN(envVar, "=", 2)
 	if len(parts) != 2 {
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, "invalid format, use NAME=VALUE")))
+		errMsg := "invalid format, use NAME=VALUE"
+		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, errMsg)))
+		s.notify("env", sess, false, errMsg, map[string]interface{}{
+			"envVar": envVar,
+		})
 		return nil
 	}
 	name := parts[0]
+	value := parts[1]
 
 	// Check if variable is allowed
 	allowed := s.config.ShellConfig.AllowedEnvVars
@@ -635,49 +604,21 @@ func (s *Server) handleEnv(stream *quic.Stream, cmd *protocol.Command, sess *ses
 			}
 		}
 		if !found {
-			stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("environment variable not allowed: %s", name))))
+			errMsg := fmt.Sprintf("environment variable not allowed: %s", name)
+			stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, errMsg)))
+			s.notify("env", sess, false, errMsg, map[string]interface{}{
+				"name":  name,
+				"value": value,
+			})
 			return nil
 		}
 	}
 
 	sess.envVars = append(sess.envVars, envVar)
 	stream.Write([]byte(protocol.BuildResponse(protocol.ResponseOK, "environment variable set")))
-	return nil
-}
-
-func (s *Server) handleCD(stream *quic.Stream, cmd *protocol.Command, sess *session) error {
-	if len(cmd.Args) == 0 {
-		sess.workingDir = "."
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseOK, "changed directory to home")))
-		return nil
-	}
-	newDir := cmd.Args[0]
-	var targetPath string
-	if filepath.IsAbs(newDir) {
-		targetPath = newDir
-	} else {
-		targetPath = filepath.Join(sess.workingDir, newDir)
-	}
-	absPath, err := s.resolvePathRelativeToHome(targetPath, sess.homeDir)
-	if err != nil {
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("invalid directory: %v", err))))
-		return nil
-	}
-	info, err := os.Stat(absPath)
-	if err != nil {
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, fmt.Sprintf("directory not accessible: %v", err))))
-		return nil
-	}
-	if !info.IsDir() {
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, "not a directory")))
-		return nil
-	}
-	relPath, err := filepath.Rel(sess.homeDir, absPath)
-	if err != nil {
-		stream.Write([]byte(protocol.BuildResponse(protocol.ResponseError, "cannot compute relative path")))
-		return nil
-	}
-	sess.workingDir = relPath
-	stream.Write([]byte(protocol.BuildResponse(protocol.ResponseOK, fmt.Sprintf("changed directory to %s", relPath))))
+	s.notify("env", sess, true, "", map[string]interface{}{
+		"name":  name,
+		"value": value,
+	})
 	return nil
 }

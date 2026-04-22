@@ -43,7 +43,7 @@ Path to client private key (PEM format, must have 600 permissions,
 default: ~/.quicsc/private.key)
 .TP
 \fB\-a\fR, \fB\-\-ca\-cert\fR \fICA_FILE\fR
-CA certificate to verify server (optional)
+CA certificate to verify server (optional). Default: ~/.quicsc/ca.crt if present
 .TP
 \fB\-k\fR, \fB\-\-insecure\fR
 Skip server certificate verification (for testing only)
@@ -140,10 +140,22 @@ Client certificates are automatically read from \fB~/.quicsc/\fR if available:
 ~/.quicsc/
 - public.crt    # Client certificate
 - private.key   # Private key (must have 600 permissions)
-- ca.crt        # CA certificate (optional)
+- ca.crt        # CA certificate (optional, loaded automatically if present)
 .fi
 .PP
-To install certificates:
+Certificates can be generated using the server's built-in commands:
+.nf
+# On the server
+quicsd create-cert --userid <userid> --name <name> --surname <surname>
+
+# Copy to client
+scp server:/etc/quics/certs/<userid>.{crt,key} ~/.quicsc/
+mv ~/.quicsc/<userid>.crt ~/.quicsc/public.crt
+mv ~/.quicsc/<userid>.key ~/.quicsc/private.key
+chmod 600 ~/.quicsc/private.key
+.fi
+.PP
+Alternatively, use the OpenSSL scripts in the \fIcerts/\fR directory:
 .nf
 cd certs/users/<userid>
 ./install-to-client.sh
@@ -170,8 +182,11 @@ Packets every 15 seconds to maintain NAT connections
 .B ~/.quicsc/
 Default client certificate directory
 .TP
+.B /etc/quics/certs/
+Server certificate directory (CA and user certificates)
+.TP
 .B certs/users/*/install-to-client.sh
-Scripts to install user certificates
+OpenSSL scripts to install user certificates (alternative method)
 .SH SEE ALSO
 .BR quicsd (1)
 .SH AUTHOR

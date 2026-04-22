@@ -6,7 +6,8 @@ tls:
   key_file: "certs/server.key"
 
 auth:
-  client_ca_file: ""
+  client_ca_file: "certs/ca-ecdsa.crt"
+  certs_dir: "./certs"
 
 storage:
   root_dir: "./files"
@@ -19,13 +20,21 @@ quic:
 shell:
   enabled: true
   # Allowed commands can be literal strings or regex patterns (containing ^ $ . * + ? ( ) [ ] { } | \)
-  allowed_commands: []
+  allowed_commands: ["^ls.*", "mkdir", "^rm.*", "cat", "echo", "pwd", "printf"]
   max_execution_time_seconds: 30
-  allowed_env_vars: []
+  allowed_env_vars: ["PATH", "HOME", "USER", "CUSTOM_VAR"]
 
-# Logging configuration
-log:
-  type: "stderr"  # stderr, file, syslog
-  # file_path: "/var/log/quicsd.log"  # required if type=file
-  # syslog_host: "localhost"  # optional, default localhost
-  # syslog_port: 514          # optional, default 514
+# Webhook notifications (optional)
+# webhook:
+#   url: "http://localhost:8080/webhook"
+#   timeout_seconds: 10
+#   retry_count: 2
+#   enabled: false
+#   # Authentication: none, basic, bearer, mtls
+#   auth_type: "none"
+#   username: ""           # for basic auth
+#   password: ""           # for basic auth
+#   bearer_token: ""       # for bearer auth
+#   client_cert: ""        # for mtls (certificate file)
+#   client_key: ""         # for mtls (private key file)
+#   insecure_skip_verify: false  # skip SSL certificate verification

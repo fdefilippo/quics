@@ -1,17 +1,15 @@
 # QUICS - QUIC File Transfer and Remote Command Execution
 
-A secure file transfer and remote command execution application built on the QUIC protocol using quic-go with post-quantum hybrid cryptography.
+A secure file transfer and remote command execution application built on the QUIC protocol using quic-go.
 
 ## Features
 
-- **Post-quantum hybrid cryptography**: Uses X25519MLKEM768 hybrid curve for forward secrecy against quantum computers
-- **Modern TLS 1.3 configuration**: Strong cipher suites with AES-256-GCM, ChaCha20-Poly1305
-- **Secure mutual authentication** with X.509 certificates
-- **File upload/download** with binary and ASCII modes (line ending conversion)
-- **Remote command execution** with configurable whitelist and environment variables
-- **Interactive client mode** with local command execution
-- **Configurable server** via YAML configuration
-- **Concurrent connection handling**
+- Secure mutual authentication with X.509 certificates
+- File upload/download with binary and ASCII modes (line ending conversion)
+- Remote command execution with configurable whitelist and environment variables
+- Interactive client mode with local command execution
+- Configurable server via YAML configuration
+- Concurrent connection handling
 
 ## Building
 
@@ -33,7 +31,8 @@ tls:
   key_file: "certs/server.key"
 
 auth:
-  client_ca_file: "certs/ca.crt"  # optional
+  client_ca_file: "certs/ca.crt"  # mandatory – CA certificate for client authentication
+  certs_dir: "./certs"            # directory for CA and user certificates
 
 storage:
   root_dir: "./files"
@@ -51,30 +50,27 @@ shell:
   allowed_env_vars: ["PATH", "HOME", "USER", "CUSTOM_VAR"]
 ```
 
-## Cryptographic Configuration
-
-QUICS uses a hardened TLS 1.3 configuration with post-quantum hybrid cryptography:
-
-### Key Exchange (in order of preference)
-1. **X25519MLKEM768** - Hybrid post-quantum curve (X25519 + ML-KEM-768)
-2. **X25519** - High-performance elliptic curve
-3. **CurveP256** - NIST P-256 for compatibility
-
-### Cipher Suites
-- `TLS_AES_256_GCM_SHA384` - AES-256-GCM with SHA-384
-- `TLS_CHACHA20_POLY1305_SHA256` - ChaCha20-Poly1305
-- `TLS_AES_128_GCM_SHA256` - AES-128-GCM with SHA-256
-
-### Protocol Settings
-- TLS 1.3 only (required by QUIC)
-- Mutual authentication with X.509 certificates
-- Forward secrecy enabled by default
-
-This configuration is hardcoded in both server and client for security consistency.
-
 ## Certificate Generation
 
-Test certificates are included in `certs/`. To regenerate:
+Test certificates are included in `certs/`. You can regenerate them using the built‑in commands or the external OpenSSL script.
+
+### Built‑in Certificate Management
+
+The server includes two commands for creating a Certificate Authority and user certificates:
+
+```bash
+# Create a new ECDSA P‑256 CA (saved in certs_dir)
+./bin/quicsd create-ca --userid ca --name "QUICS CA" --email "admin@example.com"
+
+# Create a user certificate signed by the CA
+./bin/quicsd create-cert --userid alice --name "Alice" --surname "Smith" --email "alice@example.com"
+```
+
+The CA certificate will be saved as `certs/ca.crt` and private key as `certs/ca.key`. User certificates are saved as `certs/<userid>.crt` and `certs/<userid>.key`. The private keys have permissions `600`.
+
+### Using OpenSSL Script
+
+Alternatively, you can use the OpenSSL script in `certs/`:
 
 ```bash
 cd certs
@@ -91,9 +87,13 @@ mkdir -p ~/.quicsc
 cp certs/client.crt ~/.quicsc/public.crt
 cp certs/client.key ~/.quicsc/private.key
 chmod 600 ~/.quicsc/private.key
+# Optional: copy CA certificate for server verification
+cp certs/ca.crt ~/.quicsc/ca.crt
 ```
 
 The private key must have permissions `600` (read/write for owner only). If permissions are incorrect, the client will report an error.
+
+The client automatically loads `~/.quicsc/ca.crt` if present (no need to specify `--ca-cert`).
 
 ## Usage
 
@@ -104,6 +104,18 @@ The private key must have permissions `600` (read/write for owner only). If perm
 # or short form
 ./quicsd -c ./config/server.yaml
 ```
+
+The server also provides certificate‑management commands:
+
+```bash
+# Create a new CA
+./quicsd create-ca --userid ca --name "QUICS CA"
+
+# Create a user certificate
+./quicsd create-cert --userid alice --name "Alice" --surname "Smith"
+```
+
+See `./quicsd --help` for all available commands.
 
 ### Client
 
@@ -239,25 +251,64 @@ OK
 <stderr>
 ```
 
+## Webhook Notifications
+
+The server can send HTTP POST notifications to a configured URL when client actions are completed (successfully or with error). Notifications are sent asynchronously and include details about the action.
+
+### Configuration
+
+Add to `config/server.yaml`:
+
+```yaml
+webhook:
+  url: "http://localhost:8080/webhook"
+  timeout_seconds: 10
+  retry_count: 2
+  enabled: true
+  # Authentication: none, basic, bearer, mtls
+  auth_type: "none"
+  username: ""           # for basic auth
+  password: ""           # for basic auth
+  bearer_token: ""       # for bearer auth
+  client_cert: ""        # for mtls (certificate file)
+  client_key: ""         # for mtls (private key file)
+  insecure_skip_verify: false  # skip SSL certificate verification
+```
+
+Authentication options:
+- `none`: No authentication (default)
+- `basic`: HTTP Basic authentication with `username` and `password`
+- `bearer`: Bearer token authentication with `bearer_token`
+- `mtls`: Mutual TLS authentication with `client_cert` and `client_key` files
+
+Set `insecure_skip_verify: true` to skip SSL certificate verification for HTTPS endpoints (e.g., self‑signed certificates).
+
+### Notification Format
+
+```json
+{
+  "action": "upload",
+  "userid": "client-certificate-common-name",
+  "timestamp": "2026-04-22T10:30:00Z",
+  "success": true,
+  "error": "",
+  "details": {
+    "filename": "test.txt",
+    "size": 1234,
+    "mode": "bin"
+  }
+}
+```
+
+Supported actions: `upload`, `download`, `command`, `exec`, `env`.
+
 ## Security Notes
 
-### Cryptography
-- **Post-quantum hybrid key exchange**: Uses X25519MLKEM768 (X25519 + ML-KEM-768) as preferred curve, with fallback to X25519 and P-256
-- **TLS 1.3 only**: Enforces modern protocol with forward secrecy
-- **Strong cipher suites**: TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256, TLS_AES_128_GCM_SHA256
-- **Certificate-based authentication**: Mutual TLS with X.509 client certificates
-
-### Access Control
-- **Command whitelisting**: Prevents arbitrary command execution
-- **Environment variable whitelisting**: Controls variable passing to executed commands
-- **User isolation**: Each user gets isolated home directory with 0700 permissions
-- **Path traversal protection**: Blocks attempts to escape user home directory
-
-### Best Practices
+- The server requires client certificate authentication
+- Command whitelisting prevents arbitrary command execution
+- Environment variable whitelisting controls variable passing
 - Use proper CA-signed certificates in production
 - Never expose the server to untrusted networks without proper sandboxing
-- Regularly rotate certificates and monitor logs
-- Configure appropriate idle timeouts and keep-alive periods
 
 ## Development
 
@@ -267,4 +318,4 @@ This project uses Go modules. Dependencies:
 
 ## License
 
-GPLv3
+MIT

@@ -8,7 +8,6 @@ const (
 	CommandCmd      = "CMD"
 	CommandExec     = "EXEC"
 	CommandEnv      = "ENV"
-	CommandCD       = "CD"
 
 	ResponseOK    = "OK"
 	ResponseError = "ERROR"
