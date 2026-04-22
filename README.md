@@ -267,4 +267,4 @@ This project uses Go modules. Dependencies:
 
 ## License
 
-MIT
+GPLv3
