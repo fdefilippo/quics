@@ -3,7 +3,7 @@
 .PHONY: all server client clean test vet fmt install
 
 # Version information
-VERSION := 0.1
+VERSION := 0.2
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -21,7 +21,7 @@ all: server client
 # Build server
 server:
 	@mkdir -p $(BINDIR)
-	go build $(LDFLAGS) -o $(SERVER_BINARY) ./cmd/server
+	CGO_ENABLED=1 go build $(LDFLAGS) -o $(SERVER_BINARY) ./cmd/server
 
 # Build client  
 client:

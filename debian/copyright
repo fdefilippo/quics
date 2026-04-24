@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: quics
 Upstream-Contact: Francesco Defilippo <francesco@defilippo.org>
-Source: https://github.com/francesco/quics
+Source: https://github.com/fdefilippo/quics
 
 Files: *
 Copyright: 2025 Francesco Defilippo <francesco@defilippo.org>

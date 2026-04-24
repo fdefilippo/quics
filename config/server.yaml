@@ -6,11 +6,18 @@ tls:
   key_file: "certs/server.key"
 
 auth:
-  client_ca_file: "certs/ca-ecdsa.crt"
+  client_ca_file: "certs/ca.crt"
   certs_dir: "./certs"
 
+identity:
+  map_client_cn_to_local_user: true
+  reject_if_local_user_missing: true
+
 storage:
+  mode: "virtual-root"
   root_dir: "./files"
+  user_root_policy: "home"
+  user_subdir: ""
 
 # QUIC connection settings
 quic:

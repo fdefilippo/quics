@@ -1,30 +1,39 @@
 .\" Manpage for quicsc
 .\" groff -man -Tascii quicsc.1 | less
-.TH QUICSC 1 "April 2026" "QUICS v0.1" "User Commands"
+.TH QUICSC 1 "April 2026" "QUICS v0.2" "User Commands"
 .SH NAME
 quicsc \- QUIC client for secure file transfer and remote command execution
 .SH SYNOPSIS
 .B quicsc
 [\fIOPTIONS\fR]
 [\fISERVER_ADDR\fR]
+.br
+.B quicsc import
+[\fIOPTIONS\fR]
+.br
+.B quicsc change\-password
+[\fIOPTIONS\fR]
 .SH DESCRIPTION
 .B quicsc
 is a client for secure file transfer and remote command execution over the
 QUIC protocol with mutual TLS authentication. It uses X.509 client certificates
-for authentication and can operate in both interactive and non-interactive modes.
+for authentication and can operate in both interactive and
+non-interactive modes.
 .PP
 The client supports file upload/download, remote command execution, and
 execution of commands with specific user/group privileges (Linux only).
 All communication is encrypted using TLS 1.3 over QUIC.
 .SH CRYPTOGRAPHY
-The client uses a hardened TLS 1.3 configuration with post-quantum hybrid cryptography:
+The client uses a hardened TLS 1.3 configuration with post-quantum
+hybrid cryptography:
 .RS
 .IP \(bu 2
 Preferred key exchange: X25519MLKEM768 (X25519 + ML-KEM-768 hybrid)
 .IP \(bu 2
 Fallback curves: X25519, CurveP256
 .IP \(bu 2
-Cipher suites: TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256, TLS_AES_128_GCM_SHA256
+Cipher suites: TLS_AES_256_GCM_SHA384,
+TLS_CHACHA20_POLY1305_SHA256, TLS_AES_128_GCM_SHA256
 .IP \(bu 2
 TLS 1.3 only with mutual authentication
 .IP \(bu 2
@@ -36,26 +45,61 @@ Forward secrecy enabled by default
 Server address (default: localhost:4242)
 .TP
 \fB\-C\fR, \fB\-\-client\-cert\fR \fICERT_FILE\fR
-Path to client certificate (PEM format, default: ~/.quicsc/public.crt)
+Path to client certificate (PEM or PKCS#12 format). Default:
+~/.quicsc/servers/<hostname>.p12, then ~/.quicsc/client.p12, then PEM
+files.
 .TP
 \fB\-K\fR, \fB\-\-client\-key\fR \fIKEY_FILE\fR
 Path to client private key (PEM format, must have 600 permissions,
-default: ~/.quicsc/private.key)
+default: ~/.quicsc/private.key). Ignored if PKCS#12 file is used.
 .TP
 \fB\-a\fR, \fB\-\-ca\-cert\fR \fICA_FILE\fR
-CA certificate to verify server (optional). Default: ~/.quicsc/ca.crt if present
+CA certificate to verify server (optional). CA is automatically
+extracted from PKCS#12 file; use this flag to override or when using PEM
+certificates.
 .TP
 \fB\-k\fR, \fB\-\-insecure\fR
 Skip server certificate verification (for testing only)
 .TP
 \fB\-i\fR, \fB\-\-interactive\fR
-Start interactive session (default: true)
+Start interactive session (default: false)
 .TP
 \fB\-t\fR, \fB\-\-max\-idle\-timeout\fR \fISECONDS\fR
 Maximum idle timeout in seconds (default: 120)
 .TP
 \fB\-p\fR, \fB\-\-keep\-alive\-period\fR \fISECONDS\fR
 Keep-alive period in seconds (default: 15, -1 to disable)
+.TP
+\fB\-P\fR, \fB\-\-password\fR \fIPASSWORD\fR
+Password for PKCS#12 certificate file (if applicable)
+.SH SUBCOMMANDS
+.TP
+.B import
+Import a PKCS#12 certificate file into the client certificate store.
+.RS
+.TP
+\fB\-f\fR, \fB\-\-file\fR \fIFILE\fR
+Path to PKCS#12 file to import (required)
+.TP
+\fB\-n\fR, \fB\-\-hostname\fR \fIHOSTNAME\fR
+Hostname for server-specific certificate
+(default: extracted from server address)
+.RE
+.TP
+.B change\-password
+Change the password of an existing PKCS#12 certificate file.
+.RS
+.TP
+\fB\-f\fR, \fB\-\-file\fR \fIFILE\fR
+Path to PKCS#12 file (default: auto-detected from --client-cert or
+~/.quicsc/servers/<hostname>.p12)
+.TP
+\fB\-\-old\-password\fR \fIPASSWORD\fR
+Current password of the PKCS#12 file
+.TP
+\fB\-\-new\-password\fR \fIPASSWORD\fR
+New password for the PKCS#12 file (empty string clears the password)
+.RE
 .SH NON-INTERACTIVE COMMANDS
 .TP
 \fB\-u\fR, \fB\-\-upload\fR \fILOCAL_FILE\fR
@@ -86,7 +130,7 @@ User to run command as ('-' for current user)
 \fB\-G\fR, \fB\-\-exec\-group\fR \fIGROUP\fR
 Group to run command as ('-' for current group)
 .SH INTERACTIVE MODE
-When started without non-interactive commands, \fBquicsc\fR enters interactive
+When started with the \fB--interactive\fR flag, \fBquicsc\fR enters interactive
 mode with the following commands:
 .TP
 .B ! \fICOMMAND\fR
@@ -127,20 +171,52 @@ Execute remote command:
 .B quicsc \-c "ls \-la" server.example.com:4243
 .TP
 Interactive session:
-.B quicsc \-s server.example.com:4243
+.B quicsc \-s server.example.com:4243 \-i
 .TP
 Execute command as another user (Linux):
 .B quicsc \-U www\-data \-G www\-data \-X "id" server.example.com:4243
 .TP
 With custom certificates:
-.B quicsc \-C ~/certs/user.crt \-K ~/certs/user.key \-a ~/certs/ca.crt server.example.com:4243
+\fBquicsc \-C ~/certs/user.crt \-K ~/certs/user.key \-a
+~/certs/ca.crt server.example.com:4243\fR
+.TP
+Import a PKCS#12 certificate:
+.B quicsc import \-f /path/to/certificate.p12 \-s server.example.com:4243
+.TP
+Import with custom hostname:
+.B quicsc import \-f /path/to/certificate.p12 \-n myserver
+.TP
+Change PKCS#12 password:
+\fBquicsc change\-password \-\-old\-password "old"
+\-\-new\-password "new" \-s server.example.com:4243\fR
 .SH CERTIFICATE CONFIGURATION
-Client certificates are automatically read from \fB~/.quicsc/\fR if available:
+Client certificates are automatically searched in the following order:
+.IP 1. 3
+Server-specific PKCS#12: \fB~/.quicsc/servers/<hostname>.p12\fR
+.IP 2. 3
+Global PKCS#12: \fB~/.quicsc/client.p12\fR
+.IP 3. 3
+Legacy PEM format (server-specific directory):
+\fB~/.quicsc/servers/<hostname>/public.crt\fR and \fBprivate.key\fR
+.IP 4. 3
+Legacy PEM format (global): \fB~/.quicsc/public.crt\fR and \fBprivate.key\fR
+.PP
+Where <hostname> is extracted from the server address (port removed).
+.PP
+Preferred format is PKCS#12 (single encrypted file containing client
+certificate, private key, and CA certificate chain).
+.PP
+Directory structure (legacy PEM):
 .nf
 ~/.quicsc/
-- public.crt    # Client certificate
-- private.key   # Private key (must have 600 permissions)
-- ca.crt        # CA certificate (optional, loaded automatically if present)
+- public.crt           # Global client certificate (fallback)
+- private.key          # Global private key (must have 600 permissions)
+- ca.crt               # Global CA certificate (optional)
+- servers/             # Server-specific certificates
+  - example.com/       # For server example.com:4243
+    - public.crt       # Client certificate for this server
+    - private.key      # Private key (600 permissions)
+    - ca.crt           # CA certificate for this server
 .fi
 .PP
 Certificates can be generated using the server's built-in commands:
@@ -148,11 +224,16 @@ Certificates can be generated using the server's built-in commands:
 # On the server
 quicsd create-cert --userid <userid> --name <name> --surname <surname>
 
-# Copy to client
-scp server:/etc/quics/certs/<userid>.{crt,key} ~/.quicsc/
-mv ~/.quicsc/<userid>.crt ~/.quicsc/public.crt
-mv ~/.quicsc/<userid>.key ~/.quicsc/private.key
-chmod 600 ~/.quicsc/private.key
+# Copy PKCS#12 file to client (recommended)
+scp server:/etc/quics/certs/<userid>.p12 ~/.quicsc/servers/<server-hostname>.p12
+
+# Legacy PEM copy (if needed)
+scp server:/etc/quics/certs/<userid>.{crt,key} ~/.quicsc/servers/<server-hostname>/
+mv ~/.quicsc/servers/<server-hostname>/<userid>.crt ~/.quicsc/servers/<server-hostname>/public.crt
+mv ~/.quicsc/servers/<server-hostname>/<userid>.key ~/.quicsc/servers/<server-hostname>/private.key
+chmod 600 ~/.quicsc/servers/<server-hostname>/private.key
+# Copy CA certificate if needed
+scp server:/etc/quics/certs/ca.crt ~/.quicsc/servers/<server-hostname>/ca.crt
 .fi
 .PP
 Alternatively, use the OpenSSL scripts in the \fIcerts/\fR directory:
@@ -180,7 +261,10 @@ Packets every 15 seconds to maintain NAT connections
 .SH FILES
 .TP
 .B ~/.quicsc/
-Default client certificate directory
+Global client certificate directory
+.TP
+.B ~/.quicsc/servers/<hostname>/
+Server-specific certificate directory
 .TP
 .B /etc/quics/certs/
 Server certificate directory (CA and user certificates)

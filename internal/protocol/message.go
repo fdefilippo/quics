@@ -7,11 +7,13 @@ import (
 )
 
 type Command struct {
-	Type    string
-	Args    []string
-	Mode    string
-	Size    int64
-	Content []byte
+	Type     string
+	Args     []string
+	Mode     string
+	Size     int64
+	Content  []byte
+	Checksum string // SHA-256 hex string (UPLOAD/DOWNLOAD)
+	Offset   int64  // resume offset (DOWNLOAD)
 }
 
 func ParseCommand(line string) (*Command, error) {
@@ -47,6 +49,9 @@ func ParseCommand(line string) (*Command, error) {
 		if len(args) >= 3 {
 			cmd.Mode = strings.ToUpper(args[2])
 		}
+		if len(args) >= 4 {
+			cmd.Checksum = args[3]
+		}
 	case CommandDownload, CommandGet:
 		if len(args) < 1 {
 			return nil, fmt.Errorf("%s requires filename", cmdType)
@@ -54,16 +59,22 @@ func ParseCommand(line string) (*Command, error) {
 		if len(args) >= 2 {
 			cmd.Mode = strings.ToUpper(args[1])
 		}
+		if len(args) >= 3 {
+			offset, err := strconv.ParseInt(args[2], 10, 64)
+			if err == nil {
+				cmd.Offset = offset
+			}
+		}
 	case CommandCmd:
 		if len(args) < 1 {
 			return nil, fmt.Errorf("%s requires command", cmdType)
 		}
 	case CommandExec:
-		if len(args) < 3 {
-			return nil, fmt.Errorf("%s requires user, group and command", cmdType)
+		if len(args) < 1 {
+			return nil, fmt.Errorf("%s requires a command", cmdType)
 		}
-		// First two args are user and group, rest is the command
-		cmd.Args = []string{args[0], args[1], strings.Join(args[2:], " ")}
+		// All args form the command (user/group are no longer sent by client)
+		cmd.Args = []string{strings.Join(args, " ")}
 	case CommandEnv:
 		if len(args) != 1 || !strings.Contains(args[0], "=") {
 			return nil, fmt.Errorf("%s requires NAME=VALUE format", cmdType)

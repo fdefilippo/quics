@@ -1,9 +1,9 @@
 Name:           quics
-Version:        0.1
+Version:        0.2
 Release:        1%{?dist}
 Summary:        QUIC File Transfer and Remote Command Execution
 License:        GPLv3
-URL:            https://github.com/francesco/quics
+URL:            https://github.com/fdefilippo/quics
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  golang >= 1.16
@@ -80,5 +80,7 @@ fi
 %dir %{_sharedstatedir}/quics/files
 
 %changelog
+* Thu Apr 23 2026 Francesco Defilippo <francesco@defilippo.org> - 0.2-1
+- Version bump to 0.2: resume upload/download, SHA-256 checksum verification, security fixes
 * Mon Apr 21 2025 Francesco Defilippo <francesco@defilippo.org> - 0.1-1
 - Initial RPM package

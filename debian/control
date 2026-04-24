@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Francesco Defilippo <francesco@defilippo.org>
 Build-Depends: debhelper-compat (= 13), golang-go (>= 1.16), dh-golang
 Standards-Version: 4.6.2
-Homepage: https://github.com/francesco/quics
+Homepage: https://github.com/fdefilippo/quics
 Rules-Requires-Root: no
 
 Package: quics
